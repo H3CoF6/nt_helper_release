@@ -1,0 +1,51 @@
+{
+  "commit": "cf4d90400279263a4ae31ea144680db36d7dd04b",
+  "builtAt": "2026-09-15T21:55:14.511Z",
+  "runId": "35026317690",
+  "source": "H3CoF6/nt_helper@cf4d90400279263a4ae31ea144680db36d7dd04b",
+  "dressKeySeed": "cf4d90400279263a4ae31ea144680db36d7dd04b",
+  "platforms": {
+    "win32-x64": {
+      "asset": "nt_helper-win32-x64.node",
+      "sha256": "5e983d1fe3cf11679f2555329c7ccfdef51efaeb5459b7386c6f5e735a3863ba",
+      "size": 10649088
+    },
+    "linux-x64": {
+      "asset": "nt_helper-linux-x64.node",
+      "sha256": "6d30ac5b981d26f7e3494ac2db1a54fe6f96e48acebf40b353efa09bb4738999",
+      "size": 13924216
+    },
+    "linux-arm64": {
+      "asset": "nt_helper-linux-arm64.node",
+      "sha256": "1754e552219ebb0b4a2342a0635c151f6c113ccdee772e66e018687547f96aaa",
+      "size": 13515520
+    },
+    "darwin-x64": {
+      "asset": "nt_helper-darwin-x64.node",
+      "sha256": "34e5e78603b38b0d3098be50da2f3a6edd5e47febd19627202f5bf3369cd787f",
+      "size": 10179448
+    },
+    "darwin-arm64": {
+      "asset": "nt_helper-darwin-arm64.node",
+      "sha256": "35bfeb94908e719b97b9fae3ec486e6d5403b36997174b62804c2d61112bdc6c",
+      "size": 9392112
+    }
+  },
+  "dress": {
+    "bubble": {
+      "asset": "dress-bubble.dat",
+      "sha256": "8abe9128c83dd70e7bff925b9ec066b2cf959adffb41b74d017971e3ea90d04a",
+      "size": 24661541
+    },
+    "widget": {
+      "asset": "dress-widget.dat",
+      "sha256": "17cb88eff93f392107e03f6da151571108e2b67c9420b1b91154c32a6593ea86",
+      "size": 12690821
+    },
+    "font": {
+      "asset": "dress-font.dat",
+      "sha256": "76cf6dbc76e47d2d3be2953ed75b4c1110cc2d0cd2355156807d900282ffaf85",
+      "size": 2201749
+    }
+  }
+}
