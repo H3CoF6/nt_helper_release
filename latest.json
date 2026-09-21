@@ -1,52 +1,52 @@
 {
-  "tag": "nt-helper-20260919-907aa3e",
-  "commit": "907aa3ec8702de46452989e843fad699e016df86",
-  "builtAt": "2026-09-19T23:23:08.818Z",
-  "runId": "35475187119",
-  "source": "H3CoF6/nt_helper@907aa3ec8702de46452989e843fad699e016df86",
-  "dressKeySeed": "907aa3ec8702de46452989e843fad699e016df86",
+  "tag": "nt-helper-20260921-22c8d27",
+  "commit": "22c8d27dce6c4728375ec9445a87728d198a2d00",
+  "builtAt": "2026-09-21T21:48:12.761Z",
+  "runId": "35657169879",
+  "source": "H3CoF6/nt_helper@22c8d27dce6c4728375ec9445a87728d198a2d00",
+  "dressKeySeed": "22c8d27dce6c4728375ec9445a87728d198a2d00",
   "platforms": {
     "win32-x64": {
       "asset": "nt_helper-win32-x64.node",
-      "sha256": "434fd268f7e11ba8ced775b68b67da1c7503ff802d09fe930f5f6c90f7a0af99",
-      "size": 11308032
+      "sha256": "cb5e0c181d8d30fb4968d0f354907b6c629ba9b79f9b958558df926f87265d3f",
+      "size": 11364352
     },
     "linux-x64": {
       "asset": "nt_helper-linux-x64.node",
-      "sha256": "0eb1e67d8cadd6fda4caed6fa01960c16a3bd1403bff624070915d0714e491d9",
-      "size": 14546392
+      "sha256": "e8fca067aaabf2f9d5ddbf444fba096a09963c2c6882b9525c6fa5abd3b483df",
+      "size": 14601656
     },
     "linux-arm64": {
       "asset": "nt_helper-linux-arm64.node",
-      "sha256": "461cc66b6725764382345beaa1ebc2dcbfbec1749426da91bc1204f5da5127a2",
-      "size": 14141432
+      "sha256": "160fa70b39f23df7a18fd47d558a7a554603e1e15137d3aed34a49549b3849e4",
+      "size": 14150040
     },
     "darwin-x64": {
       "asset": "nt_helper-darwin-x64.node",
-      "sha256": "b3928740a5cfb31b28e507a2324e176871f840428ffc34d36bcf8a157484f727",
-      "size": 10782776
+      "sha256": "698f1180d64ba74cd5e8171568609e920524149e2bb4d213f775145a234de22b",
+      "size": 10829456
     },
     "darwin-arm64": {
       "asset": "nt_helper-darwin-arm64.node",
-      "sha256": "c3597cccc1522c4e87d398de19f5c224c8293ea8445c6d4a215bcaade945d23b",
-      "size": 9954432
+      "sha256": "4743c299e2cfb0d38f14cfdbe64c80956aa3842e26d42e373f7a47156ad71178",
+      "size": 9993200
     }
   },
   "dress": {
     "bubble": {
       "asset": "dress-bubble.dat",
-      "sha256": "c4139d3c1bcbe84569f6e9cde9f8ca49f23657bc07f19b1da06bae48047560ef",
-      "size": 24737749
+      "sha256": "0c863797d330b5b4d1e29e115efec0bf6a438cf20262936b03325158e3d2292c",
+      "size": 24804533
     },
     "widget": {
       "asset": "dress-widget.dat",
-      "sha256": "6dcbff83432802b0b785447cfd1265f7b85dce97587509ba137ac1b7cf2dc618",
-      "size": 12743733
+      "sha256": "c5711fb5b1bcd584dd8ec7710c90c457e1b041e1d157e6a4acfccb1224648754",
+      "size": 12775093
     },
     "font": {
       "asset": "dress-font.dat",
-      "sha256": "71d8cce24fbca2f14b86c5020f1418aeeda423a5f4d844387d49822027b7185c",
-      "size": 2205989
+      "sha256": "413d16cd467dcaa968aef7ea3256cc14df7f5be9579cd8d62382ffd7ada78588",
+      "size": 2208629
     }
   }
 }
