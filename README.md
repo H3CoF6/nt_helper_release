@@ -1,10 +1,15 @@
 # nt_helper_release
 
 [H3CoF6/nt_helper](https://github.com/H3CoF6/nt_helper)（私有）构建产物的**公开发布点**。
-内容全部由那边的 `Rust-Release-Build` 工作流自动推送，不要手改。
+
+构建在**本仓**的 `Release` 工作流里跑：用 `NT_HELPER_TOKEN` 浅克隆私仓源码到公开
+runner 上编译，产物直接挂到本仓的 draft release，全部到齐后转正。这样 Actions 的
+额度算在公开仓上，不消耗私仓的私有分钟数。
 
 - **Releases**：每个 tag 一份，含 5 个平台的 `nt_helper.node`、装扮资源 `*.dat`、`manifest.json`、`SHA256SUMS`
 - **latest.json**：指向最新一份（与那个 Release 里的 `manifest.json` 完全相同）
+
+发版：Actions → `Release` → Run workflow（可选填 `ref`，默认 `main`）。
 
 在 WeQ 里这样取：
 

@@ -1,0 +1,445 @@
+name: Release
+
+# 构建和发布都在这个公开仓里跑：GitHub Actions 的免费额度只认 workflow 所在的
+# 仓库，所以把私仓 nt_helper 的源码用 PAT 浅克隆过来，在公开仓的 runner 上编译，
+# 不消耗私有仓的 3000 分钟 / 月。
+#
+# 日志对所有人可见 —— 源码本身不会被打印，但失败时 cargo 的输出里可能出现路径和
+# 少量代码片段。别往这里 echo 任何 secret。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: nt_helper 的分支 / 标签 / commit
+        required: false
+        default: main
+
+permissions:
+  contents: write
+
+env:
+  SOURCE_REPO: H3CoF6/nt_helper
+  RELEASE_REPO: H3CoF6/nt_helper_release
+
+jobs:
+  # 先把源码 ref 解析成具体 commit，再开一个 draft release。五个 matrix job 都
+  # 往这个 draft 上挂资产（跨 job 没有 artifact，也就没有那种"存一份中转、发完
+  # 再删"的配额问题，更不会互相看见半成品）。
+  prepare:
+    name: Open draft release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      source_sha: ${{ steps.tag.outputs.source_sha }}
+    steps:
+      # tag 里带构建日期与 commit 短 sha，方便 release 里回头查是谁编的。
+      # 同一天对同一个 commit 重跑会撞 tag（比如上次构建抖动），撞了依次补
+      # run number / 时间戳，保证一定拿到一个没人占的名字。
+      - name: Pick tag + create draft
+        id: tag
+        env:
+          GH_TOKEN: ${{ secrets.NT_HELPER_TOKEN }}
+        run: |
+          set -euo pipefail
+          SOURCE_SHA=$(gh api "repos/$SOURCE_REPO/commits/${{ inputs.ref }}" --jq .sha)
+          echo "source sha: $SOURCE_SHA"
+          BASE="nt-helper-$(date -u +%Y%m%d)-$(printf '%s' "$SOURCE_SHA" | cut -c1-7)"
+          TAG="$BASE"
+          if gh release view "$TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+            TAG="$BASE-r$GITHUB_RUN_NUMBER"
+          fi
+          if gh release view "$TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+            TAG="$BASE-r$GITHUB_RUN_NUMBER-$(date -u +%s)"
+          fi
+          # draft 不会在发布仓里建出真正的 git tag（转正时才建），所以取消 / 失败
+          # 的 run 不会留下一堆垃圾 tag，下面 cleanup 再把 draft release 收掉。
+          gh release create "$TAG" \
+            --repo "$RELEASE_REPO" \
+            --draft \
+            --title "nt_helper $TAG" \
+            --notes "nt_helper 原生产物自动发布（来源 $SOURCE_REPO@$SOURCE_SHA，run $GITHUB_RUN_ID）。产物由 matrix job 直接上传，全部到齐后转正。"
+          {
+            echo "tag=$TAG"
+            echo "source_sha=$SOURCE_SHA"
+          } >> "$GITHUB_OUTPUT"
+          echo "draft release: $TAG"
+
+  build:
+    name: Build Rust Binary
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: nt_helper-win32-x64
+            dress: true
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: nt_helper-linux-x64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            asset: nt_helper-linux-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset: nt_helper-darwin-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: nt_helper-darwin-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      # 浅克隆私仓，pin 到 prepare 解析出的那个 commit。persist-credentials 关掉，
+      # 免得 PAT 留在 .git/config 里被后面操作发布仓的步骤顺手带上。
+      - name: Checkout nt_helper (private source)
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          token: ${{ secrets.NT_HELPER_TOKEN }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      # SQLCipher amalgamation 带了一处 WeQ 补丁（QQ 的 pending byte 与
+      # 绝对锁字节解耦）。vendor 漂移会让 1GiB 修复悄悄消失，所以发版前
+      # 在 linux-x64 这一份上校验一次即可。
+      - name: Verify vendored SQLCipher patch
+        if: matrix.os == 'ubuntu-latest' && matrix.target == 'x86_64-unknown-linux-gnu'
+        run: bash scripts/check-libsqlite3-sys-fork.sh
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+
+      - name: Install OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          vcpkg install openssl:x64-windows-static
+          echo "OPENSSL_DIR=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static" >> $env:GITHUB_ENV
+          echo "OPENSSL_NO_VENDOR=1" >> $env:GITHUB_ENV
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            perl make flex bison curl ca-certificates
+
+      # 静态链接 libpcap（抓包模块）。发行版自带的 `libpcap.a` **不是 -fPIC**，
+      # 链进 `-pie` 的 .node 会出现 relocation 错误；所以从源码构建一个禁掉
+      # libnl/dbus/rdma/bluetooth/usb/netmap 等可选后端的最小静态库，再用
+      # `LIBPCAP_LIBDIR` 让 pcap crate 静态链接（产物自包含，不依赖用户机器上的
+      # libpcap.so.*）。arm64 交叉用 aarch64-linux-gnu-gcc 同一份源码构建。
+      - name: Build static libpcap (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://www.tcpdump.org/release/libpcap-1.10.4.tar.gz -o /tmp/libpcap.tar.gz
+          tar xzf /tmp/libpcap.tar.gz -C /tmp
+          cd /tmp/libpcap-1.10.4
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            host_flag="--host=aarch64-linux-gnu"
+            cc="aarch64-linux-gnu-gcc"
+          else
+            host_flag=""
+            cc="gcc"
+          fi
+          ./configure $host_flag --disable-shared --without-libnl --disable-dbus \
+            --disable-rdma --disable-bluetooth --disable-usb --disable-netmap \
+            CC="$cc" CFLAGS=-fPIC
+          make -j"$(nproc)"
+          mkdir -p "$GITHUB_WORKSPACE/.libpcap-static"
+          cp libpcap.a "$GITHUB_WORKSPACE/.libpcap-static/"
+          echo "LIBPCAP_LIBDIR=$GITHUB_WORKSPACE/.libpcap-static" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install NAPI CLI
+        run: npm install
+
+      - name: Build Release
+        shell: bash
+        env:
+          # Derive the dress bundle AES key from the source commit, so all five
+          # platform builds in this run share one key and any of the resulting
+          # .dat sets can be read by every platform's nt_helper.node.
+          DRESS_KEY_SEED: ${{ needs.prepare.outputs.source_sha }}
+        run: |
+          # 注入当前秒级时间戳 (用于 30 天有效期检查)
+          export BUILD_TIMESTAMP=$(date +%s)
+          echo "Baking build timestamp: $BUILD_TIMESTAMP"
+
+          # Linux aarch64 交叉编译配置
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          fi
+
+          # 抓包模块静态链接 libpcap：LIBPCAP_LIBDIR 由上面的 Build static libpcap
+          # 步骤写入 GITHUB_ENV（x64 原生 / arm64 交叉各编一份带 -fPIC 的 .a）。
+
+          # 使用 NAPI-RS 官方 CLI 构建，它会自动处理 .node 后缀和命名
+          npm run build -- --target ${{ matrix.target }}
+
+      - name: Stage binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          shopt -s nullglob
+          nodes=( *.node )
+          echo "构建产出：${nodes[*]:-(无)}"
+          if [ ${#nodes[@]} -eq 0 ]; then
+            echo "::error::没找到构建产物 *.node"
+            exit 1
+          fi
+          if [ ${#nodes[@]} -gt 1 ]; then
+            echo "::warning::出现多个 .node，取第一个：${nodes[0]}"
+          fi
+          # napi 按 target 命名（nt_helper.<target>.node）；发布名与 WeQ 的
+          # scripts/fetch-native.mjs 对齐，统一成 nt_helper-<platform>.node。
+          cp "${nodes[0]}" "out/${{ matrix.asset }}.node"
+          ls -lh out
+
+      - name: Upload binary to draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" "out/${{ matrix.asset }}.node" \
+            --repo "$RELEASE_REPO" --clobber
+          echo "uploaded ${{ matrix.asset }}.node to draft $TAG"
+
+      # 装扮资源三个平台共用同一份（DRESS_KEY_SEED=源码 commit 派生同一个 AES key），
+      # 只需要传一次 —— 早先每个平台各传一份，5 份里 4 份是纯浪费。
+      - name: Upload dress resources to draft release
+        if: matrix.dress
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          args=()
+          for part in bubble widget font; do
+            src="resources/dress/$part.dat"
+            if [ ! -f "$src" ]; then
+              echo "::error::装扮资源缺失：$src"
+              exit 1
+            fi
+            cp "$src" "out/dress-$part.dat"
+            args+=("out/dress-$part.dat")
+          done
+          gh release upload "$TAG" "${args[@]}" \
+            --repo "$RELEASE_REPO" --clobber
+          ls -lh out/dress-*.dat
+
+  # 补上 manifest.json / SHA256SUMS，然后把 draft 转正、更新 latest.json。
+  publish:
+    name: Publish to nt_helper_release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      # 拿发布仓的 main，后面提交 latest.json 用。
+      - uses: actions/checkout@v6
+
+      - name: Download draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "$TAG" --repo "$RELEASE_REPO" --dir dist --clobber
+          ls -lh dist
+
+      - name: Stage manifest + SHA256SUMS
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          # 五个平台 + 装扮三件套都得在，缺一个就不能发：WeQ 的
+          # fetch-native.mjs 是按 manifest 整取，半套资产发出去比不发还糟。
+          #
+          # 构建 / 过期时间直接从刚下载的 .node 里问（getBuildInfo）—— 有效期只
+          # 在 Rust 里定义一处，这里不抄任何天数。五个平台同一 BUILD_TIMESTAMP，
+          # 问 linux-x64 这一份就够。
+          node -e '
+            const fs = require("node:fs");
+            const crypto = require("node:crypto");
+            const { createRequire } = require("node:module");
+            const sha = (f) =>
+              crypto.createHash("sha256").update(fs.readFileSync(`dist/${f}`)).digest("hex");
+            const size = (f) => fs.statSync(`dist/${f}`).size;
+            const iso = (sec) => (sec == null ? null : new Date(sec * 1000).toISOString());
+            let buildTime = null;
+            let expiresAt = null;
+            try {
+              const addon = createRequire(`${process.cwd()}/`)(
+                `${process.cwd()}/dist/nt_helper-linux-x64.node`,
+              );
+              const info = addon.getBuildInfo?.();
+              buildTime = iso(info?.buildTime ?? null);
+              expiresAt = iso(info?.expireTime ?? null);
+              console.log(`binary build info: buildTime=${buildTime} expiresAt=${expiresAt}`);
+            } catch (err) {
+              console.error(`::warning::读不到 .node 的构建信息（${err?.message ?? err}），manifest 不带过期时间`);
+            }
+            const platforms = {};
+            for (const p of ["win32-x64", "linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"]) {
+              const asset = `nt_helper-${p}.node`;
+              if (!fs.existsSync(`dist/${asset}`)) {
+                console.error(`缺资产 ${asset}`);
+                process.exit(1);
+              }
+              platforms[p] = { asset, sha256: sha(asset), size: size(asset) };
+            }
+            const dress = {};
+            for (const d of ["bubble", "widget", "font"]) {
+              const asset = `dress-${d}.dat`;
+              if (!fs.existsSync(`dist/${asset}`)) {
+                console.error(`缺资产 ${asset}`);
+                process.exit(1);
+              }
+              dress[d] = { asset, sha256: sha(asset), size: size(asset) };
+            }
+            const manifest = {
+              tag: process.env.TAG,
+              commit: process.env.SOURCE_SHA,
+              builtAt: new Date().toISOString(),
+              ...(buildTime ? { buildTime } : {}),
+              ...(expiresAt ? { expiresAt } : {}),
+              runId: process.env.GITHUB_RUN_ID,
+              source: `H3CoF6/nt_helper@${process.env.SOURCE_SHA}`,
+              // 装扮资源的 AES key 由这个 seed 派生并烘焙进 .node
+              dressKeySeed: process.env.SOURCE_SHA,
+              platforms,
+              dress,
+            };
+            fs.writeFileSync("dist/manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
+            console.log(JSON.stringify(manifest.platforms, null, 2));
+          '
+
+          # 发出去之前再验一遍字段：少一个字段，WeQ 侧的 fetch-native.mjs 就直接废了
+          # （manifest 里没 tag 就没法拼资产 URL）。
+          node -e '
+            const m = JSON.parse(require("node:fs").readFileSync("dist/manifest.json", "utf8"));
+            const problems = [];
+            for (const k of ["tag", "commit", "builtAt", "platforms", "dress"]) {
+              if (!m[k]) problems.push(`缺字段 ${k}`);
+            }
+            if (!m.expiresAt) {
+              console.error("::warning::manifest 缺 expiresAt（构建信息没读出来），每日清理会回落到推导有效期");
+            }
+            for (const p of ["win32-x64", "linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"]) {
+              if (!m.platforms?.[p]?.sha256) problems.push(`平台 ${p} 缺 sha256`);
+            }
+            for (const d of ["bubble", "widget", "font"]) {
+              if (!m.dress?.[d]?.sha256) problems.push(`装扮资源 ${d} 缺 sha256`);
+            }
+            if (problems.length) {
+              console.error(`manifest 不合格：${problems.join("；")}`);
+              process.exit(1);
+            }
+            console.log(`manifest ok: ${m.tag} (${Object.keys(m.platforms).length} 平台 + ${Object.keys(m.dress).length} 装扮包)`);
+          '
+
+          (cd dist && sha256sum ./*.node ./*.dat manifest.json > SHA256SUMS && cat SHA256SUMS)
+          ls -lh dist
+
+      - name: Upload manifest + SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" dist/manifest.json dist/SHA256SUMS \
+            --repo "$RELEASE_REPO" --clobber
+
+      # 到这里资产已齐、manifest 已校验，把 draft 转正。draft 期间发布仓里没有
+      # 真正的 tag，也不会被 WeQ 的 releases/latest 看到，所以上面任何一步挂了
+      # 都只是留下一个半成品草稿，不会污染"最新版本"。
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cat > NOTES.md <<'EOF'
+          nt_helper 原生产物的自动发布（来源 H3CoF6/nt_helper）。
+
+          - 5 个平台的 `nt_helper.node`
+          - 装扮离线资源 `bubble/widget/font.dat`（AES key 由本次构建 commit 派生，只与同一 tag 的 `.node` 配套）
+          - `manifest.json` / `SHA256SUMS`
+
+          WeQ 侧用 `pnpm native:fetch` 取用。二进制自身带有效期，发版前记得取最新的那份。
+          EOF
+          # 构建 / 过期时间直接取 manifest 里那两个字段（源头是 .node 自报的
+          # getBuildInfo，天数只在 Rust 里定义一处）。
+          node -e '
+            const fs = require("node:fs");
+            const m = JSON.parse(fs.readFileSync("dist/manifest.json", "utf8"));
+            const lines = ["", `- 构建时间：${m.buildTime ?? "未知"}`, `- 有效期至：${m.expiresAt ?? "未知"}`];
+            fs.appendFileSync("NOTES.md", lines.join("\n") + "\n");
+          '
+          gh release edit "$TAG" \
+            --repo "$RELEASE_REPO" \
+            --draft=false \
+            --latest \
+            --notes-file NOTES.md
+          echo "published https://github.com/$RELEASE_REPO/releases/tag/$TAG"
+
+      # 让 releases/latest/download/manifest.json 这个稳定 URL 跟着走：把同一份
+      # manifest 提交成 main 分支的 latest.json（人肉 diff 也方便）。
+      #
+      # 用 github-actions[bot] 的固定数字 id 做署名；GITHUB_TOKEN 推的提交不会
+      # 触发新的 workflow，所以这里不会自己套娃。
+      - name: Update latest.json on main
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cp dist/manifest.json latest.json
+          git add latest.json
+          if git diff --cached --quiet; then
+            echo "latest.json 没变化，跳过提交"
+          else
+            git -c user.name="github-actions[bot]" \
+                -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "chore: publish $TAG"
+            git push
+          fi
+
+  # 构建 / 发布挂了就把草稿收掉，别让半成品在发布仓里越堆越多。草稿转正后
+  # （publish 成功）这里不会跑。
+  cleanup-draft:
+    name: Clean up draft on failure
+    needs: [prepare, build, publish]
+    if: always() && needs.prepare.result == 'success' && needs.publish.result != 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -uo pipefail
+          # 草稿没有 git tag，`--cleanup-tag` 会在删完 release 后因为"tag 不存在"
+          # 报 422 —— 命令返回值不可信，直接用"还查不查得到"来判定是否删干净。
+          gh release delete "$TAG" --repo "$RELEASE_REPO" --yes --cleanup-tag >/dev/null 2>&1 || true
+          if gh release view "$TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+            gh release delete "$TAG" --repo "$RELEASE_REPO" --yes >/dev/null 2>&1 || true
+          fi
+          if gh release view "$TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+            echo "::warning::草稿 $TAG 没能自动清掉，去发布仓手动删一下"
+          else
+            echo "deleted draft $TAG"
+          fi
