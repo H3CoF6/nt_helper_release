@@ -1,6 +1,6 @@
 # nt_helper_release
 
-[H3CoF6/nt_helper](https://github.com/H3CoF6/nt_helper) 构建产物的**缓存仓库**喵
+[weq-devs/nt_helper](https://github.com/weq-devs/nt_helper) 构建产物的**缓存仓库**喵
 
 在 WeQ 里：
 

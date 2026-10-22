@@ -19,8 +19,8 @@ permissions:
   contents: write
 
 env:
-  SOURCE_REPO: H3CoF6/nt_helper
-  RELEASE_REPO: H3CoF6/nt_helper_release
+  SOURCE_REPO: weq-devs/nt_helper
+  RELEASE_REPO: weq-devs/nt_helper_release
 
 jobs:
   # 先把源码 ref 解析成具体 commit，再开一个 draft release。五个 matrix job 都
@@ -318,7 +318,7 @@ jobs:
               ...(buildTime ? { buildTime } : {}),
               ...(expiresAt ? { expiresAt } : {}),
               runId: process.env.GITHUB_RUN_ID,
-              source: `H3CoF6/nt_helper@${process.env.SOURCE_SHA}`,
+              source: `weq-devs/nt_helper@${process.env.SOURCE_SHA}`,
               // 装扮资源的 AES key 由这个 seed 派生并烘焙进 .node
               dressKeySeed: process.env.SOURCE_SHA,
               platforms,
@@ -374,7 +374,7 @@ jobs:
         run: |
           set -euo pipefail
           cat > NOTES.md <<'EOF'
-          nt_helper 原生产物的自动发布（来源 H3CoF6/nt_helper）。
+          nt_helper 原生产物的自动发布（来源 weq-devs/nt_helper）。
 
           - 5 个平台的 `nt_helper.node`
           - 装扮离线资源 `bubble/widget/font.dat`（AES key 由本次构建 commit 派生，只与同一 tag 的 `.node` 配套）
